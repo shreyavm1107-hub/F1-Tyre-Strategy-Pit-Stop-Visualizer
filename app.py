@@ -70,19 +70,43 @@ event_name = st.sidebar.selectbox("Grand Prix", event_names)
 # which causes a DataNotLoadedError on cache hits. Instead we load a fresh
 # Session every run (FastF1 has its own on-disk cache for the API calls, so
 # this stays fast) and only cache the plain pandas DataFrames we pull out of it.
+import io
+import logging
+
 def _load_session_object(year: int, event_name: str, session_type: str = "R"):
-    session = fastf1.get_session(year, event_name, session_type)
+    # backend="fastf1" forces the real live-timing backend instead of letting
+    # FastF1 silently fall back to a backend with no lap/telemetry support
+    # (which is what was causing session.laps to never populate, with no
+    # error raised).
+    session = fastf1.get_session(year, event_name, session_type, backend="fastf1")
     session.load(laps=True, telemetry=False, weather=False, messages=False)
-    return session
+    return session, session.f1_api_support
 
 
 @st.cache_data(show_spinner="Fetching race data from the F1 timing API...")
 def load_laps_and_results(year: int, event_name: str, session_type: str = "R"):
-    session = _load_session_object(year, event_name, session_type)
+    session, api_support = _load_session_object(year, event_name, session_type)
+    if not api_support:
+        raise RuntimeError(
+            f"FastF1 reports f1_api_support=False for {event_name} {year} "
+            f"({session_type}). This session has no lap timing / telemetry "
+            f"data available from the live timing API, even though results "
+            f"data may exist."
+        )
     laps_df = pd.DataFrame(session.laps)
     results_df = pd.DataFrame(session.results)
     return laps_df, results_df
 
+
+# Capture FastF1's internal log output so we can see *why* a load failed
+# even when it doesn't raise a normal Python exception (FastF1 sometimes
+# logs a warning and silently leaves data unloaded instead of raising).
+log_buffer = io.StringIO()
+_log_handler = logging.StreamHandler(log_buffer)
+_log_handler.setLevel(logging.DEBUG)
+fastf1_logger = logging.getLogger("fastf1")
+fastf1_logger.addHandler(_log_handler)
+fastf1_logger.setLevel(logging.DEBUG)
 
 try:
     laps, results = load_laps_and_results(year, event_name)
@@ -90,10 +114,18 @@ except Exception as e:
     st.error(
         "Couldn't load session data from FastF1. This is usually a temporary "
         "issue with the F1 timing API, an unsupported session (e.g. a very "
-        "recent or cancelled race), or a cache write problem."
+        "recent or cancelled race), or a network/cache problem."
     )
     st.exception(e)
+    captured_logs = log_buffer.getvalue()
+    if captured_logs:
+        st.markdown("**FastF1 internal log output (this usually shows the real cause):**")
+        st.code(captured_logs, language="text")
+    else:
+        st.info("No internal FastF1 log output was captured — this may point to a network-level block rather than a data issue.")
     st.stop()
+finally:
+    fastf1_logger.removeHandler(_log_handler)
 
 if laps.empty:
     st.error("No lap data available for this session. Try a different race — very recent or very old sessions sometimes have gaps.")
@@ -115,7 +147,7 @@ else:
 # HEADER
 # ----------------------------------------------------------------------------
 st.title("🏎️ F1 Tyre Strategy & Pit Stop Visualizer")
-st.caption(f"By Shreya Mohite | {year} {event_name} — Race strategy breakdown from FastF1 timing data")
+st.caption(f"By Shreya Mohite| {year} {event_name} — Race strategy breakdown from FastF1 timing data")
 
 st.markdown(
     f"**{event_name} {year}** · {len(drivers)} drivers · {int(laps['LapNumber'].max())} laps"
@@ -330,3 +362,4 @@ with tab4:
 
 st.markdown("---")
 st.caption("Data: FastF1 (official F1 live timing API) · Built with Streamlit & Plotly")
+
