@@ -93,7 +93,7 @@ else:
 # HEADER
 # ----------------------------------------------------------------------------
 st.title("🏎️ F1 Tyre Strategy & Pit Stop Visualizer")
-st.caption(f"By Shreya Vishwakarma | {year} {event_name} — Race strategy breakdown from FastF1 timing data")
+st.caption(f"By Shreya Mohite | {year} {event_name} — Race strategy breakdown from FastF1 timing data")
 
 st.markdown(
     f"**{event_name} {year}** · {len(drivers)} drivers · {int(laps['LapNumber'].max())} laps"
